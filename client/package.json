@@ -1,11 +1,12 @@
 {
   "name": "disaster-client",
   "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build"
-  },
+  "type": "module","scripts": {
+  "dev": "vite",
+  "build": "node node_modules/vite/bin/vite.js build",
+  "lint": "eslint .",
+  "preview": "vite preview"
+},
   "dependencies": {
     "leaflet": "^1.9.4",
     "react": "^18.3.1",
