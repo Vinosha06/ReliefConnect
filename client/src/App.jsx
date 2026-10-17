@@ -86,6 +86,11 @@ export default function App() {
   // Selected Route Coordinates for Interactive Map Route Line
   const [activeRoute, setActiveRoute] = useState(null);
 
+  // 💬 Chat States
+  const [activeChatNeed, setActiveChatNeed] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+
   // 📍 Selected Search Radius for Volunteers (meters)
   const [searchRadius, setSearchRadius] = useState(5000);
 
@@ -169,6 +174,41 @@ export default function App() {
     return () => s.disconnect();
   }, [load]);
 
+  // Socket listener for active chat messages
+  useEffect(() => {
+    if (!activeChatNeed) return;
+    const s = io("http://localhost:4000");
+    s.on(`chat:need:${activeChatNeed.id}`, (msg) => {
+      setMessages((prev) => [...prev, msg]);
+    });
+    return () => s.disconnect();
+  }, [activeChatNeed]);
+
+  const openChat = async (need) => {
+    setActiveChatNeed(need);
+    try {
+      const history = await api(`/needs/${need.id}/messages`);
+      setMessages(history);
+    } catch (e) {
+      console.error("Failed to load chat messages:", e);
+    }
+  };
+
+  const sendChatMessage = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !activeChatNeed) return;
+    try {
+      await api(`/needs/${activeChatNeed.id}/messages`, {
+        sender_id: user.id,
+        sender_name: user.name,
+        message: chatInput
+      });
+      setChatInput("");
+    } catch (e) {
+      alert("Failed to send message: " + e.message);
+    }
+  };
+
   const join = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -246,7 +286,7 @@ export default function App() {
             <select name="role" style={{ ...styles.select, backgroundColor: theme.inputBg, color: theme.textPrimary, borderColor: theme.border }}>
               <option value="victim">Victim (උදව් අවශ්‍යයි)</option>
               <option value="donor">Donor (දෙන්න පුළුවන්)</option>
-              <option value="volunteer">Volunteer (ස්වේඡා සේවක)</option>
+              <option value="volunteer">Volunteer (ස්වේච්ඡා සේවක)</option>
             </select>
           </div>
           <button style={styles.btnPrimary}>ඇතුල් වන්න / ලියාපදිංචි වන්න</button>
@@ -525,13 +565,21 @@ export default function App() {
                 <div style={{ marginTop: 6, fontSize: 12, color: theme.textSecondary, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span>Status: <b style={{ color: COLOR[n.status] }}>{n.status}</b></span>
                   
-                  {/* Direct Route View Button for Any Need */}
-                  <button 
-                    style={{ ...styles.btnSmall, backgroundColor: "#0284c7", padding: "2px 6px", fontSize: 11 }} 
-                    onClick={() => showRoute(n.lat, n.lng, pos[0], pos[1])}
-                  >
-                    🗺️ Route to Need
-                  </button>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {/* 💬 Open Chat Button */}
+                    <button 
+                      style={{ ...styles.btnSmall, backgroundColor: "#8b5cf6", padding: "2px 6px", fontSize: 11 }}
+                      onClick={() => openChat(n)}
+                    >
+                      💬 Chat
+                    </button>
+                    <button 
+                      style={{ ...styles.btnSmall, backgroundColor: "#0284c7", padding: "2px 6px", fontSize: 11 }} 
+                      onClick={() => showRoute(n.lat, n.lng, pos[0], pos[1])}
+                    >
+                      🗺️ Route
+                    </button>
+                  </div>
                 </div>
 
                 {user.role === "volunteer" && n.status === "requested" && (
@@ -572,6 +620,40 @@ export default function App() {
         </div>
 
       </div>
+
+      {/* 💬 Real-Time Live Chat Drawer / Modal */}
+      {activeChatNeed && (
+        <div style={{ position: "fixed", bottom: 20, right: 20, width: 320, height: 400, backgroundColor: theme.sidebarBg, border: `1px solid ${theme.border}`, borderRadius: 12, boxShadow: "0 10px 25px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", zIndex: 10000 }}>
+          <div style={{ padding: "10px 14px", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: theme.formBg, borderTopLeftRadius: 12, borderTopRightRadius: 12 }}>
+            <span style={{ fontWeight: 700, fontSize: 13 }}>💬 Chat: Need #{activeChatNeed.id} ({activeChatNeed.item_type})</span>
+            <button onClick={() => setActiveChatNeed(null)} style={{ border: "none", background: "none", cursor: "pointer", fontWeight: 700, color: theme.textPrimary, fontSize: 14 }}>✕</button>
+          </div>
+
+          <div style={{ flex: 1, padding: 10, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
+            {messages.map((msg, idx) => {
+              const isMe = msg.sender_id === user.id;
+              return (
+                <div key={idx} style={{ alignSelf: isMe ? "flex-end" : "flex-start", maxWidth: "80%", backgroundColor: isMe ? "#2563eb" : theme.formBg, color: isMe ? "#ffffff" : theme.textPrimary, padding: "6px 10px", borderRadius: 8, border: `1px solid ${theme.border}` }}>
+                  <div style={{ fontSize: 10, opacity: 0.8, marginBottom: 2, fontWeight: 700 }}>{msg.sender_name}</div>
+                  <div>{msg.message}</div>
+                </div>
+              );
+            })}
+            {messages.length === 0 && <div style={{ textAlign: "center", color: theme.textSecondary, marginTop: 40, fontSize: 12 }}>සංවාදය ආරම්භ කරන්න... (No messages yet)</div>}
+          </div>
+
+          <form onSubmit={sendChatMessage} style={{ padding: 10, borderTop: `1px solid ${theme.border}`, display: "flex", gap: 6, backgroundColor: theme.formBg, borderBottomLeftRadius: 12, borderBottomRightRadius: 12 }}>
+            <input 
+              type="text" 
+              placeholder="Type a message..." 
+              value={chatInput} 
+              onChange={(e) => setChatInput(e.target.value)} 
+              style={{ ...styles.input, flex: 1, backgroundColor: theme.inputBg, color: theme.textPrimary, borderColor: theme.border, fontSize: 12, padding: "6px 8px" }} 
+            />
+            <button style={{ ...styles.btnPrimary, width: "auto", padding: "6px 12px", fontSize: 12 }}>Send</button>
+          </form>
+        </div>
+      )}
 
       {/* Interactive Map View */}
       <div style={{ flex: 1, width: "100%", height: isMobile ? "calc(100vh - 56px)" : "100vh" }}>
