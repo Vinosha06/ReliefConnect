@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { MapContainer, TileLayer, CircleMarker, Popup, useMapEvents, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, useMapEvents, useMap } from "react-leaflet";
 import { io } from "socket.io-client";
 import "leaflet/dist/leaflet.css";
 
@@ -30,6 +30,27 @@ const COLOR = {
 
 const URGENCY_LABEL = { 1: "Low", 2: "Medium", 3: "High" };
 const URGENCY_COLOR = { 1: "#10b981", 2: "#f59e0b", 3: "#ef4444" };
+
+const playAlertSound = () => {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.5);
+  } catch (err) {
+    console.error("Audio playback error:", err);
+  }
+};
 
 function Picker({ onPick }) {
   useMapEvents({ click: (e) => onPick([e.latlng.lat, e.latlng.lng]) });
@@ -62,6 +83,12 @@ export default function App() {
   const [filterItem, setFilterItem] = useState("all");
   const [filterUrgency, setFilterUrgency] = useState("all");
 
+  // Selected Route Coordinates for Interactive Map Route Line
+  const [activeRoute, setActiveRoute] = useState(null);
+
+  // 📍 Selected Search Radius for Volunteers (meters)
+  const [searchRadius, setSearchRadius] = useState(5000);
+
   // Mobile Responsive State
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -76,6 +103,12 @@ export default function App() {
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -117,10 +150,22 @@ export default function App() {
     load();
     const s = io("http://localhost:4000");
     s.on("changed", load);
+    
     s.on("need:new", (n) => { 
-      setAlertMsg(`🚨 නව ඉල්ලීමක්: ${n.item_type} × ${n.quantity}`); 
+      const msgText = `🚨 නව ඉල්ලීමක්: ${n.item_type.toUpperCase()} × ${n.quantity}`;
+      setAlertMsg(msgText); 
+      playAlertSound();
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("ReliefConnect Alert 🚨", {
+          body: `අලුත් ${n.item_type} ඉල්ලීමක් පැමිණ ඇත! (Quantity: ${n.quantity})`,
+          icon: "🤝"
+        });
+      }
+
       setTimeout(() => setAlertMsg(""), 6000); 
     });
+
     return () => s.disconnect();
   }, [load]);
 
@@ -201,7 +246,7 @@ export default function App() {
             <select name="role" style={{ ...styles.select, backgroundColor: theme.inputBg, color: theme.textPrimary, borderColor: theme.border }}>
               <option value="victim">Victim (උදව් අවශ්‍යයි)</option>
               <option value="donor">Donor (දෙන්න පුළුවන්)</option>
-              <option value="volunteer">Volunteer (ස්වේච්ඡා සේවක)</option>
+              <option value="volunteer">Volunteer (ස්වේඡා සේවක)</option>
             </select>
           </div>
           <button style={styles.btnPrimary}>ඇතුල් වන්න / ලියාපදිංචි වන්න</button>
@@ -234,9 +279,28 @@ export default function App() {
   };
 
   const toggleLiveGps = () => setIsLive((prev) => !prev);
-  const findMatches = async (id) => setMatches({ ...matches, [id]: await api(`/needs/${id}/matches?radius=5000`) });
-  const accept = (nid, rid) => api(`/needs/${nid}/accept`, { resource_id: rid, volunteer_id: user.id }).catch((e) => alert(e.message));
-  const deliver = (id) => api(`/needs/${id}/deliver`, {});
+  
+  const findMatches = async (need) => {
+    const fetchedMatches = await api(`/needs/${need.id}/matches?radius=${searchRadius}`);
+    setMatches({ ...matches, [need.id]: fetchedMatches });
+  };
+
+  const showRoute = (needLat, needLng, resourceLat, resourceLng) => {
+    setActiveRoute([
+      [needLat, needLng],
+      [resourceLat || pos[0], resourceLng || pos[1]]
+    ]);
+  };
+  
+  const accept = (nid, rid) => {
+    api(`/needs/${nid}/accept`, { resource_id: rid, volunteer_id: user.id })
+      .then(() => setActiveRoute(null))
+      .catch((e) => alert(e.message));
+  };
+
+  const deliver = (id) => {
+    api(`/needs/${id}/deliver`, {}).then(() => setActiveRoute(null));
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", height: "100vh", width: "100vw", overflow: "hidden", fontFamily: "'Inter', system-ui, sans-serif", backgroundColor: theme.bg, color: theme.textPrimary }}>
@@ -419,12 +483,31 @@ export default function App() {
 
         {/* Active Needs Feed List */}
         <div style={{ marginTop: 6, paddingBottom: 20 }}>
-          <h4 style={{ fontSize: 14, fontWeight: 700, color: theme.textPrimary, marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            Active Needs Feed 
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <h4 style={{ fontSize: 14, fontWeight: 700, color: theme.textPrimary, margin: 0 }}>
+              Active Needs Feed 
+            </h4>
             <span style={{ backgroundColor: theme.formBg, color: theme.textPrimary, padding: "2px 8px", borderRadius: 12, fontSize: 12 }}>
               {filteredNeeds.length} / {needs.length}
             </span>
-          </h4>
+          </div>
+
+          {/* Volunteer Match Search Radius Customizer */}
+          {user.role === "volunteer" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 10px", backgroundColor: theme.formBg, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: theme.textSecondary }}>📍 Search Radius:</span>
+              <select 
+                value={searchRadius} 
+                onChange={(e) => setSearchRadius(Number(e.target.value))} 
+                style={{ ...styles.select, backgroundColor: theme.inputBg, color: theme.textPrimary, borderColor: theme.border, fontSize: 12, padding: "4px 8px" }}
+              >
+                <option value={2000}>2 km</option>
+                <option value={5000}>5 km</option>
+                <option value={10000}>10 km</option>
+                <option value={20000}>20 km</option>
+              </select>
+            </div>
+          )}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {filteredNeeds.map((n) => (
@@ -439,21 +522,36 @@ export default function App() {
                   </span>
                 </div>
 
-                <div style={{ marginTop: 6, fontSize: 12, color: theme.textSecondary, display: "flex", justifyContent: "space-between" }}>
+                <div style={{ marginTop: 6, fontSize: 12, color: theme.textSecondary, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span>Status: <b style={{ color: COLOR[n.status] }}>{n.status}</b></span>
+                  
+                  {/* Direct Route View Button for Any Need */}
+                  <button 
+                    style={{ ...styles.btnSmall, backgroundColor: "#0284c7", padding: "2px 6px", fontSize: 11 }} 
+                    onClick={() => showRoute(n.lat, n.lng, pos[0], pos[1])}
+                  >
+                    🗺️ Route to Need
+                  </button>
                 </div>
 
                 {user.role === "volunteer" && n.status === "requested" && (
                   <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px dashed ${theme.border}` }}>
-                    <button style={{ ...styles.btnSecondary, backgroundColor: theme.formBg, color: theme.textPrimary, borderColor: theme.border }} onClick={() => findMatches(n.id)}>🔍 Find nearby (5km)</button>
+                    <button style={{ ...styles.btnSecondary, backgroundColor: theme.formBg, color: theme.textPrimary, borderColor: theme.border }} onClick={() => findMatches(n)}>
+                      🔍 Find nearby ({searchRadius / 1000} km)
+                    </button>
 
                     {(matches[n.id] || []).map((m) => (
                       <div key={m.id} style={{ ...styles.matchItem, backgroundColor: theme.formBg, color: theme.textPrimary }}>
-                        <span>Resource #{m.id} ({m.quantity}) • <b>{(m.distance_m / 1000).toFixed(1)} km</b></span>
-                        <button style={styles.btnSmall} onClick={() => accept(n.id, m.id)}>Accept</button>
+                        <div>
+                          <span>Resource #{m.id} ({m.quantity}) • <b>{(m.distance_m / 1000).toFixed(1)} km</b></span>
+                        </div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button style={{ ...styles.btnSmall, backgroundColor: "#0284c7" }} onClick={() => showRoute(n.lat, n.lng, m.lat, m.lng)}>🗺️ Route</button>
+                          <button style={styles.btnSmall} onClick={() => accept(n.id, m.id)}>Accept</button>
+                        </div>
                       </div>
                     ))}
-                    {matches[n.id]?.length === 0 && <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>ළඟපාත සම්පත් නැත</div>}
+                    {matches[n.id]?.length === 0 && <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>ළඟපාත සම්පත් නැත ({searchRadius / 1000} km සීමාව තුළ)</div>}
                   </div>
                 )}
 
@@ -495,6 +593,11 @@ export default function App() {
             <Popup>📡 Your Live Location</Popup>
           </CircleMarker>
           <CircleMarker center={pos} radius={22} pathOptions={{ color: "#60a5fa", fillColor: "#93c5fd", fillOpacity: 0.3, weight: 1 }} />
+
+          {/* Interactive Polyline Route Line */}
+          {activeRoute && (
+            <Polyline positions={activeRoute} pathOptions={{ color: "#2563eb", weight: 5, dashArray: "10, 10" }} />
+          )}
 
           {/* Need Markers */}
           {filteredNeeds.map((n) => (
