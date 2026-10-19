@@ -115,6 +115,10 @@ app.post("/api/needs", async (req, res) => {
   res.json(result.rows[0]);
 });
 
+app.get('/', (req, res) => {
+  res.send('ReliefConnect Backend is Running!');
+});
+
 // Resources Routes
 app.get("/api/resources", async (req, res) => {
   const result = await pool.query(
@@ -209,3 +213,5 @@ io.on("connection", (socket) => {
 
 const PORT = 4000;
 server.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+
+module.exports = app;
