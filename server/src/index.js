@@ -11,6 +11,10 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.send("ReliefConnect Backend Working!");
+});
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/relief",
 });
@@ -113,10 +117,6 @@ app.post("/api/needs", async (req, res) => {
   io.emit("need:new", result.rows[0]);
   io.emit("changed");
   res.json(result.rows[0]);
-});
-
-app.get('/', (req, res) => {
-  res.send('ReliefConnect Backend is Running!');
 });
 
 // Resources Routes
